@@ -6,7 +6,8 @@ language, including greeting images and stickers), it sends back a fresh
 greeting for that festival. When they wish you a happy birthday, it thanks them.
 Everything else is left alone. Claude writes each reply.
 
-It runs in the cloud, so your computer doesn't need to stay on.
+It's meant to run on your own computer during festival season. It can also run
+on a server if you want it on all the time.
 
 > **Read this first.** This uses WhatsApp Web through the unofficial
 > [`whatsapp-web.js`](https://github.com/pedroslopez/whatsapp-web.js) library,
@@ -14,14 +15,46 @@ It runs in the cloud, so your computer doesn't need to stay on.
 > unofficial clients, and accounts that send many automated messages can be
 > banned. The agent keeps its activity low and human-like, but the risk is not zero.
 
-## Deploy to the cloud (recommended)
+## Run it on your computer
 
-The agent runs as a Docker container on any host with a persistent disk.
-[Railway](https://railway.com) is the simplest; any Linux server works too.
+Requires Node.js 22.9+ and Google Chrome.
+
+1. `npm install`
+2. Copy `.env.example` to `.env` and add your
+   [Anthropic API key](https://console.anthropic.com), your name and time zone.
+3. `npm run dry-run` prints the replies it would send without sending anything.
+   Link WhatsApp by scanning the QR code: WhatsApp → Settings → Linked devices →
+   Link a device. You only scan once; the login is saved in `.data/`.
+4. `npm start` goes live. On a Mac, use `npm run start:awake` instead (see below).
+
+### Keeping it running on a Mac
+
+`npm run start:awake` runs the agent and:
+
+- **stops your Mac from sleeping on its idle timeout** while the agent runs. The
+  screen still turns off and locks as usual; only the system stays awake. It
+  goes back to normal as soon as you stop the agent.
+- **restarts the agent if it stops unexpectedly**, for example when WhatsApp
+  disconnected during a sleep.
+
+A sleeping Mac can't run anything, so the agent only answers while the Mac is
+awake. Closing the lid on battery still puts the Mac to sleep; when it wakes,
+the agent restarts itself if needed. Greetings that arrived during sleep may not
+be answered. Press Ctrl+C to stop.
+
+The agent only answers while it's running. Scheduled replies are saved, so if
+you stop it and start it again later the same day, they still go out.
 
 > **Run only one copy.** Each running copy is a separate linked device, and
 > they don't share their reply history, so two copies would both reply.
-> Stop any local copy before deploying.
+
+## Optional: run it on a server
+
+To keep it running without your computer, run it as a Docker container on any
+host with a persistent disk. Always-on hosting usually costs a few euros a month.
+Serverless platforms such as Vercel can't run it: it needs a browser that stays
+connected to WhatsApp and a disk that keeps its data. Stop any local copy before
+deploying.
 
 ### Railway
 
@@ -58,17 +91,6 @@ docker compose logs -f
 ```
 
 The pairing code shows in the logs. Data is kept in `./.data` next to the files.
-
-## Run on your own computer
-
-Requires Node.js 22.9+ and Google Chrome.
-
-1. `npm install`
-2. Copy `.env.example` to `.env` and fill it in. Leave `PAIR_PHONE_NUMBER` empty
-   to scan a QR code instead.
-3. `npm run dry-run` prints the replies it would send. Link WhatsApp via
-   Settings → Linked devices.
-4. `npm start` goes live. It only answers while your computer is awake.
 
 ## Kill switch and model switcher
 
@@ -180,5 +202,6 @@ WhatsApp account. To unlink the agent, remove it under Linked devices on your ph
 | `src/queue.js`, `src/activity.js` | Saved scheduled replies and the daily activity log |
 | `src/time.js` | Time zone, quiet hours and summary-time helpers |
 | `scripts/control.js` | Terminal commands for the kill switch and model |
+| `scripts/keep-running.js` | `npm run start:awake`: keeps a Mac awake and restarts the agent if it stops |
 | `Dockerfile`, `railway.json`, `docker-compose.yml` | Cloud deployment |
 | `test/agent.test.js` | Tests, run with `npm test` (no WhatsApp or API calls) |

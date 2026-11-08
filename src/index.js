@@ -194,4 +194,5 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
   });
 }
 
-client.initialize();
+// A failed start must exit with an error, so a supervisor (keep-running.js, Docker) restarts it.
+client.initialize().catch((err) => fail(`Could not start WhatsApp: ${err.message}`));
