@@ -4,7 +4,10 @@ A WhatsApp agent that answers greetings for you. When a saved contact wishes
 you for a festival (Diwali, Holi, Eid, Christmas, New Year, any festival, in any
 language, including greeting images and stickers), it sends back a fresh
 greeting for that festival. When they wish you a happy birthday, it thanks them.
-Everything else is left alone. Claude writes each reply.
+Everything else is left alone. An AI model reads each message and writes the
+reply: by default a **free model that runs on your own computer** (Google's
+Gemma, through [Ollama](https://ollama.com)), so your messages never leave it.
+Paid Claude models are an optional upgrade.
 
 It's meant to run on your own computer during festival season. It can also run
 on a server if you want it on all the time.
@@ -17,15 +20,19 @@ on a server if you want it on all the time.
 
 ## Run it on your computer
 
-Requires Node.js 22.9+ and Google Chrome.
+Requires Node.js 22.9+, Google Chrome and [Ollama](https://ollama.com). On a
+Mac with Apple Silicon and 8 GB of memory or more:
 
-1. `npm install`
-2. Copy `.env.example` to `.env` and add your
-   [Anthropic API key](https://console.anthropic.com), your name and time zone.
-3. `npm run dry-run` prints the replies it would send without sending anything.
+1. `brew install ollama`, then `ollama serve` in one terminal and
+   `ollama pull gemma3:4b` in another (a one-time 3.3 GB download).
+   `npm run start:awake` starts Ollama for you after that.
+2. `npm install`
+3. Copy `.env.example` to `.env` and add your name and time zone.
+4. Try a few messages without WhatsApp: `npm run try -- "Happy Diwali bhai!"`
+5. `npm run dry-run` prints the replies it would send without sending anything.
    Link WhatsApp by scanning the QR code: WhatsApp → Settings → Linked devices →
    Link a device. You only scan once; the login is saved in `.data/`.
-4. `npm start` goes live. On a Mac, use `npm run start:awake` instead (see below).
+6. `npm start` goes live. On a Mac, use `npm run start:awake` instead (see below).
 
 ### Keeping it running on a Mac
 
@@ -36,6 +43,8 @@ Requires Node.js 22.9+ and Google Chrome.
   goes back to normal as soon as you stop the agent.
 - **restarts the agent if it stops unexpectedly**, for example when WhatsApp
   disconnected during a sleep.
+- **starts Ollama** if it isn't already running, and stops it again when you
+  press Ctrl+C.
 
 A sleeping Mac can't run anything, so the agent only answers while the Mac is
 awake. Closing the lid on battery still puts the Mac to sleep; when it wakes,
@@ -65,7 +74,9 @@ deploying.
    keeps your WhatsApp login, scheduled replies and history across redeploys.
    Without it you would have to link WhatsApp again after every deploy.
 4. Under **Variables**, add at least:
-   - `ANTHROPIC_API_KEY`: your [Anthropic API key](https://console.anthropic.com)
+   - `AI_MODEL`: `haiku` (or `sonnet`/`opus`) and `ANTHROPIC_API_KEY`: your
+     [Anthropic API key](https://console.anthropic.com). A server has no local
+     model, so it needs a paid Claude model.
    - `PAIR_PHONE_NUMBER`: your WhatsApp number with country code, digits only (e.g. `919876543210`)
    - `MY_NAME` and `TIMEZONE` (e.g. `Asia/Kolkata`)
    - optionally `CLOSE_CONTACTS`, `IGNORE_CONTACTS` and any other setting below
@@ -104,7 +115,7 @@ changed from the phone override `.env`.
 | `greeter status` | On/off, model, today's replies and what's scheduled |
 | `greeter pause` | Kill switch: stop all replies and cancel every scheduled one |
 | `greeter resume` | Start replying again |
-| `greeter model opus` / `sonnet` / `haiku` | Switch the Claude model |
+| `greeter model local` / `haiku` / `sonnet` / `opus` | Switch the AI model (Claude ones need an API key) |
 | `greeter close add Mom` | Add someone to close people (you get a reminder instead of an auto-reply) |
 | `greeter close remove Mom` / `greeter close list` | Remove someone / show the list |
 | `greeter ignore add +91 98765 43210` | Never read or answer this person |
@@ -125,19 +136,22 @@ remove people who were listed in `.env`.
 On the Mac you can also use `npm run pause`, `npm run resume`, `npm run status`
 and `npm run model -- haiku`.
 
-| Model | Notes |
-|---|---|
-| `opus` (default) | Claude Opus 5.5: most careful judgment |
-| `sonnet` | Claude Sonnet 5.5: cheaper, still very capable |
-| `haiku` | Claude Haiku 5.5: cheapest and fastest |
+| Model | Cost | Notes |
+|---|---|---|
+| `local` (default) | Free | Gemma 3 on your computer via Ollama. Messages never leave it. Reads greeting photos; stickers are judged by their text only. |
+| `haiku` | ~$0.0003 per message | Claude Haiku 5.5. Needs `ANTHROPIC_API_KEY` (API credits are billed separately from Claude Pro/Max plans). |
+| `sonnet` | ~$0.005 per message | Claude Sonnet 5.5 |
+| `opus` | ~$0.01 per message | Claude Opus 5.5: most careful judgment |
+
+Claude costs are rough estimates for a short text message.
 
 ## Who gets a reply
 
 - **Saved contacts only.** Numbers not in your phone's contacts are skipped and
-  their messages aren't sent to Claude. Set `REPLY_TO_UNKNOWN=1` to change that.
+  their messages aren't sent to the AI model. Set `REPLY_TO_UNKNOWN=1` to change that.
 - **Never in groups.** Group messages are dropped before they're opened.
 - **Ignore list.** These people's messages aren't opened, downloaded or sent to
-  Claude, and they never get a reply.
+  the AI model, and they never get a reply.
 - **Close people.** When they greet you, the agent doesn't reply. It sends you a
   reminder in "Message yourself" to answer them personally.
 - Never your own messages, status updates or channels.
@@ -169,7 +183,7 @@ ignore list wins if someone is on both.
   with no activity get no summary.
 - **Unread stays unread.** Replies don't mark the chat as read on your phone.
 - **Fails silent.** Questions about festivals, business promotions, "thanks for
-  the wishes" replies and anything uncertain get no reply. Errors from Claude,
+  the wishes" replies and anything uncertain get no reply. Errors from the AI model,
   refusals and unreadable answers also mean no reply.
 
 ## Settings
@@ -178,11 +192,13 @@ Set these as environment variables on your host, or in `.env` locally (see `.env
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | required | Claude API key |
+| `AI_MODEL` | `local` | Starting model: `local` (free), `haiku`, `sonnet` or `opus`; switch later with `greeter model ...` |
+| `OLLAMA_MODEL` | `gemma3:4b` | Which Ollama model `local` uses, e.g. `gemma3:12b` for better replies on 16 GB+ Macs |
+| `OLLAMA_URL` | `http://127.0.0.1:11434` | Where Ollama runs |
+| `ANTHROPIC_API_KEY` | none | Only needed for the paid Claude models |
 | `PAIR_PHONE_NUMBER` | none | Your number (digits, with country code) to link with a pairing code instead of a QR code |
 | `MY_NAME` | none | Your name, so birthday wishes meant for others aren't treated as yours |
 | `TIMEZONE` | `Asia/Kolkata` | Your time zone, for quiet hours, the summary and "today" |
-| `CLAUDE_MODEL` | `opus` | Starting model; switch later with `greeter model ...` |
 | `OCCASIONS` | all | Only reply for these, e.g. `diwali,holi,birthday,new-year` |
 | `IGNORE_CONTACTS` | none | Comma-separated people to never read or reply to |
 | `CLOSE_CONTACTS` | none | Comma-separated people to answer yourself (you get a reminder) |
@@ -200,7 +216,7 @@ Set these as environment variables on your host, or in `.env` locally (see `.env
 | `DATA_DIR` | `.data` | Where the login, history and scheduled replies are stored |
 
 Each text, image or sticker from a saved contact who isn't on the ignore list is
-sent to Claude, costing a fraction of a cent.
+read by the AI model: free with `local`, a fraction of a cent with Claude.
 
 ## Privacy
 
@@ -215,7 +231,8 @@ WhatsApp account. To unlink the agent, remove it under Linked devices on your ph
 | `src/index.js` | Connects to WhatsApp, reads settings, handles phone commands |
 | `src/agent.js` | Decides which messages to answer and schedules replies |
 | `src/scheduler.js` | Sends scheduled replies; daily limit, kill switch and summary |
-| `src/classifier.js` | Asks Claude whether a message is a greeting and writes the reply |
+| `src/classifier.js` | Asks the AI model (local or Claude) whether a message is a greeting and writes the reply |
+| `scripts/try.js` | `npm run try -- "message"`: see the decision and reply without WhatsApp |
 | `src/control.js` | Phone commands: kill switch, model, lists and settings |
 | `src/queue.js`, `src/activity.js` | Saved scheduled replies and the daily activity log |
 | `src/time.js` | Time zone, quiet hours and summary-time helpers |

@@ -2,7 +2,9 @@
 // - stops the Mac from going to sleep on its idle timeout while this runs
 //   (caffeinate -i). The screen can still turn off and lock as usual.
 // - restarts the agent if it stops unexpectedly, e.g. WhatsApp disconnected
-//   while the Mac was asleep with the lid closed. Ctrl+C stops everything.
+//   while the Mac was asleep with the lid closed.
+// - starts Ollama (the free local AI model) if it isn't running yet, and stops
+//   it again afterwards. Ctrl+C stops everything.
 import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -17,6 +19,7 @@ const RESTART_MAX_MS = 5 * 60_000;
 const HEALTHY_AFTER_MS = 10 * 60_000; // a run this long resets the restart backoff
 
 let child = null;
+let ollama = null;
 let stopping = false;
 let backoff = RESTART_MIN_MS;
 
@@ -44,16 +47,38 @@ function cleanUpBrowser() {
   }
 }
 
+const ollamaUrl = (process.env.OLLAMA_URL || "http://127.0.0.1:11434").replace(/\/+$/, "");
+
+async function ollamaIsUp() {
+  try {
+    return (await fetch(`${ollamaUrl}/api/version`, { signal: AbortSignal.timeout(2000) })).ok;
+  } catch {
+    return false;
+  }
+}
+
+/** Starts "ollama serve" when the local model is in use and Ollama isn't already running. */
+async function ensureOllama() {
+  if ((process.env.AI_MODEL || "local") !== "local" || (await ollamaIsUp())) return;
+  ollama = spawn("ollama", ["serve"], { stdio: "ignore", env: { ...process.env, OLLAMA_FLASH_ATTENTION: "1" } });
+  ollama.on("error", (err) => {
+    console.warn(`[keep-running] could not start Ollama (${err.message}). Install it with: brew install ollama`);
+    ollama = null;
+  });
+  for (let i = 0; i < 30 && ollama && !(await ollamaIsUp()); i++) await new Promise((r) => setTimeout(r, 500));
+  if (ollama) console.log("[keep-running] Started Ollama for the local model.");
+}
+
 function start() {
   const startedAt = Date.now();
   child = spawn(process.execPath, ["--env-file-if-exists=.env", "src/index.js"], { stdio: "inherit" });
   child.on("exit", (code, signal) => {
     child = null;
     if (code !== 0 || stopping) cleanUpBrowser();
-    if (stopping) return process.exit(0);
+    if (stopping) return exit();
     if (code === 0) {
       console.log("[keep-running] Agent stopped.");
-      return process.exit(0);
+      return exit();
     }
     if (Date.now() - startedAt > HEALTHY_AFTER_MS) backoff = RESTART_MIN_MS;
     console.error(`[keep-running] Agent stopped (${signal || `exit code ${code}`}); restarting in ${Math.round(backoff / 1000)}s...`);
@@ -66,8 +91,15 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
   process.on(signal, () => {
     stopping = true;
     if (child) child.kill(signal);
-    else process.exit(0);
+    else exit();
   });
 }
 
+/** Stops the Ollama this script started (one that was already running is left alone). */
+function exit() {
+  if (ollama) ollama.kill("SIGTERM");
+  process.exit(0);
+}
+
+await ensureOllama();
 start();

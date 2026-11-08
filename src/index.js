@@ -4,9 +4,9 @@ import fs from "node:fs";
 import path from "node:path";
 import pkg from "whatsapp-web.js";
 import qrcode from "qrcode-terminal";
-import { classifyAndReply, normaliseOccasion } from "./classifier.js";
+import { classifyAndReply, LOCAL, localModelName, normaliseOccasion } from "./classifier.js";
 import { createHandler, loadContactList, RepliedStore } from "./agent.js";
-import { ControlStore, effectiveList, parseChatCommand, runCommand } from "./control.js";
+import { ControlStore, effectiveList, modelLabel, parseChatCommand, runCommand } from "./control.js";
 import { PendingQueue } from "./queue.js";
 import { ActivityLog } from "./activity.js";
 import { createScheduler } from "./scheduler.js";
@@ -37,7 +37,8 @@ function contactList(fileVar, defaultFile, listVar) {
 const dataDir = path.resolve(env.DATA_DIR || ".data");
 const sessionDir = path.join(dataDir, "session");
 // Kill switch, model and everything else you change from your phone (see control.js).
-const control = new ControlStore(path.join(dataDir, "control.json"), env.CLAUDE_MODEL || "opus");
+const control = new ControlStore(path.join(dataDir, "control.json"), env.AI_MODEL || "local");
+const claudeAvailable = Boolean(env.ANTHROPIC_API_KEY || env.ANTHROPIC_AUTH_TOKEN);
 
 // Settings from .env (or their defaults). Phone commands can override most of them.
 let defaults;
@@ -56,7 +57,9 @@ try {
   fail(err.message);
 }
 if (defaults.minDelayMs > defaults.maxDelayMs) fail("MIN_DELAY_SECONDS must not be larger than MAX_DELAY_SECONDS.");
-if (!env.ANTHROPIC_API_KEY && !env.ANTHROPIC_AUTH_TOKEN) fail("Set ANTHROPIC_API_KEY before starting (see README).");
+if (control.get().model !== LOCAL && !claudeAvailable) {
+  fail(`The model is ${control.get().model}, which needs ANTHROPIC_API_KEY. Set AI_MODEL=local (free) or add a key.`);
+}
 
 /** A phone-set value if there is a valid one, otherwise the .env value. */
 function fromPhone(name, parse, fallback) {
@@ -177,7 +180,7 @@ function describeSettings() {
   const quiet = config.quietHours;
   return [
     `Settings${paused ? " (PAUSED)" : ""}:`,
-    `• Model: ${model}`,
+    `• Model: ${modelLabel(model)}`,
     `• Occasions: ${config.occasions.length ? config.occasions.join(", ") : "all festivals and birthdays"}`,
     `• Delay: ${config.minDelayMs / 1000}s to ${config.maxDelayMs / 1000}s`,
     `• Quiet hours: ${quiet ? `${clock(quiet.start)}-${clock(quiet.end)}` : "off"}`,
@@ -188,7 +191,25 @@ function describeSettings() {
   ].join("\n");
 }
 
-const commandInfo = { status: describe, settings: describeSettings, baseLists: envLists };
+const commandInfo = { status: describe, settings: describeSettings, baseLists: envLists, claudeAvailable };
+
+/** Warns early if the local model isn't available, instead of failing on the first greeting. */
+async function checkLocalModel() {
+  if (control.get().model !== LOCAL) return;
+  const url = (env.OLLAMA_URL || "http://127.0.0.1:11434").replace(/\/+$/, "");
+  try {
+    const res = await fetch(`${url}/api/tags`, { signal: AbortSignal.timeout(5000) });
+    const { models = [] } = await res.json();
+    const name = localModelName();
+    const wanted = name.includes(":") ? name : `${name}:latest`;
+    if (!models.some((m) => m.name === wanted)) {
+      console.warn(`[local model] ${name} isn't downloaded yet. Run: ollama pull ${name}`);
+    }
+  } catch {
+    console.warn(`[local model] Ollama isn't running at ${url}. Start it with "ollama serve" (npm run start:awake does this for you).`);
+  }
+}
+checkLocalModel();
 
 client.on("qr", (qr) => {
   console.log("Scan this QR code in WhatsApp > Settings > Linked devices > Link a device:");
@@ -208,7 +229,7 @@ client.on("ready", () => {
   const scope = config.occasions.length ? config.occasions.join(", ") : "all festivals and birthdays";
   const { paused, model } = control.get();
   console.log(
-    `Ready. Watching for: ${scope}. Model: ${model}.` +
+    `Ready. Watching for: ${scope}. Model: ${modelLabel(model)}.` +
       (paused ? " PAUSED (kill switch is on): nothing will be sent until resumed." : "") +
       (config.dryRun ? " DRY RUN: nothing will be sent." : "") +
       (config.replyToUnknown ? " Unknown numbers get replies too." : " Only saved contacts get replies.") +

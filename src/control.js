@@ -4,10 +4,11 @@
 // running agent immediately and survive restarts. Phone changes override .env.
 import fs from "node:fs";
 import path from "node:path";
-import { normaliseOccasion } from "./classifier.js";
+import { LOCAL, localModelName, normaliseOccasion } from "./classifier.js";
 import { parseClock, parseWindow } from "./time.js";
 
 export const MODELS = {
+  local: LOCAL, // free, runs on this computer through Ollama
   opus: "claude-opus-5-5",
   sonnet: "claude-sonnet-5-5",
   haiku: "claude-haiku-5-5",
@@ -15,9 +16,15 @@ export const MODELS = {
 
 const LISTS = { close: "close people", ignore: "ignore list" };
 
-/** Turns "sonnet" or "claude-sonnet-5-5" into a model id; returns null for anything else. */
+/** "local (gemma3:4b)" or the Claude model id, for messages. */
+export function modelLabel(model) {
+  return model === LOCAL ? `local (${localModelName()}, free)` : model;
+}
+
+/** Turns "local", "sonnet" or "claude-sonnet-5-5" into a model id; returns null for anything else. */
 export function resolveModel(name) {
   const key = (name || "").trim().toLowerCase();
+  if (key === "ollama" || key === "free") return LOCAL;
   if (MODELS[key]) return MODELS[key];
   return Object.values(MODELS).includes(key) ? key : null;
 }
@@ -34,9 +41,9 @@ export class ControlStore {
    * @param {string|null} filePath  null keeps state in memory only (tests).
    * @param {string} defaultModel
    */
-  constructor(filePath, defaultModel = MODELS.opus) {
+  constructor(filePath, defaultModel = LOCAL) {
     this.filePath = filePath;
-    this.defaultModel = resolveModel(defaultModel) || MODELS.opus;
+    this.defaultModel = resolveModel(defaultModel) || LOCAL;
     this.memory = {};
   }
 
@@ -162,7 +169,7 @@ function editList(control, listName, action, value, base) {
 const HELP = `Commands (send in "Message yourself"):
 greeter status - is it on, today's replies, what's scheduled
 greeter pause / resume - kill switch
-greeter model opus|sonnet|haiku - Claude model
+greeter model local|haiku|sonnet|opus - AI model (local is free)
 greeter close add|remove|list Mom - people you answer yourself
 greeter ignore add|remove|list +91 98765 43210 - people never read
 greeter quiet 23:00-08:00 | off - no replies in this window
@@ -178,8 +185,9 @@ greeter reset <setting> - go back to the .env value`;
  * (`node scripts/control.js pause`) and the WhatsApp "greeter ..." commands.
  * @param {ControlStore} control
  * @param {string[]} args  e.g. ["model", "haiku"] or ["close", "add", "Mom"]
- * @param {{ status?: () => string, settings?: () => string, baseLists?: { close: () => string[], ignore: () => string[] } }} [info]
- *        details from the running agent; baseLists are the .env/file entries.
+ * @param {{ status?: () => string, settings?: () => string, baseLists?: { close: () => string[], ignore: () => string[] }, claudeAvailable?: boolean }} [info]
+ *        details from the running agent; baseLists are the .env/file entries;
+ *        claudeAvailable false refuses Claude models (no API key).
  */
 export function runCommand(control, args, info = {}) {
   const command = (args[0] || "status").toLowerCase();
@@ -195,17 +203,20 @@ export function runCommand(control, args, info = {}) {
     case "start":
     case "on":
       control.set({ paused: false });
-      return `Greeter resumed. Replying with ${control.get().model}.`;
+      return `Greeter resumed. Replying with ${modelLabel(control.get().model)}.`;
     case "status": {
       const { paused, model } = control.get();
       const extra = info.status ? ` ${info.status()}` : "";
-      return `Greeter is ${paused ? "PAUSED" : "ON"}. Model: ${model}.${extra}`;
+      return `Greeter is ${paused ? "PAUSED" : "ON"}. Model: ${modelLabel(model)}.${extra}`;
     }
     case "model": {
       const model = resolveModel(value);
       if (!model) return `Unknown model "${value}". Choose: ${Object.keys(MODELS).join(", ")}.`;
+      if (model !== LOCAL && info.claudeAvailable === false) {
+        return `${model} is a paid Claude model and no ANTHROPIC_API_KEY is set, so the model stays ${modelLabel(control.get().model)}.`;
+      }
       control.set({ model });
-      return `Model switched to ${model}.`;
+      return `Model switched to ${modelLabel(model)}.`;
     }
     case "close":
     case "ignore": {

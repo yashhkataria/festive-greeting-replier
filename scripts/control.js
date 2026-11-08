@@ -5,5 +5,5 @@ import path from "node:path";
 import { ControlStore, runCommand } from "../src/control.js";
 
 const dataDir = path.resolve(process.env.DATA_DIR || ".data");
-const control = new ControlStore(path.join(dataDir, "control.json"), process.env.CLAUDE_MODEL || "opus");
+const control = new ControlStore(path.join(dataDir, "control.json"), process.env.AI_MODEL || "local");
 console.log(runCommand(control, process.argv.slice(2)));

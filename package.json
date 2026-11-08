@@ -12,7 +12,8 @@
     "resume": "node --env-file-if-exists=.env scripts/control.js resume",
     "status": "node --env-file-if-exists=.env scripts/control.js status",
     "model": "node --env-file-if-exists=.env scripts/control.js model",
-    "test": "node --test test/*.test.js"
+    "test": "node --test test/*.test.js",
+    "try": "node --env-file-if-exists=.env scripts/try.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.6.0",

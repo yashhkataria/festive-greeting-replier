@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHandler, loadContactList, matchesContactList, planSendTime, RepliedStore } from "../src/agent.js";
-import { buildContent, normaliseOccasion } from "../src/classifier.js";
+import { buildContent, normaliseOccasion, parseAnswer } from "../src/classifier.js";
 import { ControlStore, effectiveList, parseChatCommand, resolveModel, runCommand, sameEntry } from "../src/control.js";
 import { PendingQueue } from "../src/queue.js";
 import { ActivityLog, formatSummary } from "../src/activity.js";
@@ -574,12 +574,12 @@ test("model switcher: the chosen model is used for the next message", async () =
   await ctx.handle(fakeMsg({ chat: fakeChat({ id: "911@c.us" }) }));
   runCommand(ctx.control, ["model", "haiku"]);
   await ctx.handle(fakeMsg({ chat: fakeChat({ id: "912@c.us" }) }));
-  assert.deepEqual(ctx.models, ["claude-opus-5-5", "claude-haiku-5-5"]);
+  assert.deepEqual(ctx.models, ["local", "claude-haiku-5-5"]);
 });
 
 test("control commands", () => {
   const control = new ControlStore(null);
-  assert.match(runCommand(control, ["status"]), /ON\. Model: claude-opus-5-5/);
+  assert.match(runCommand(control, ["status"]), /ON\. Model: local \(gemma3:4b, free\)/);
   assert.match(runCommand(control, ["status"], { status: () => "Scheduled: 3." }), /Scheduled: 3\./);
   assert.match(runCommand(control, ["pause"]), /paused/i);
   assert.equal(control.get().paused, true);
@@ -593,9 +593,12 @@ test("control commands", () => {
 
 test("model names resolve to known models only", () => {
   assert.equal(resolveModel("Opus"), "claude-opus-5-5");
+  assert.equal(resolveModel("local"), "local");
+  assert.equal(resolveModel("ollama"), "local");
   assert.equal(resolveModel("claude-haiku-5-5"), "claude-haiku-5-5");
   assert.equal(resolveModel("claude-3-opus"), null);
-  assert.equal(new ControlStore(null, "nonsense").get().model, "claude-opus-5-5");
+  assert.equal(new ControlStore(null, "nonsense").get().model, "local");
+  assert.equal(new ControlStore(null).get().model, "local");
 });
 
 test("chat commands are recognised, and the agent's own messages are not", () => {
@@ -760,4 +763,25 @@ test("same person matching for list edits", () => {
   assert.equal(sameEntry("+91 98765 43210", "9876543210"), true);
   assert.equal(sameEntry("9876543210", "9876543211"), false);
   assert.equal(sameEntry("Mom", "9876543210"), false);
+});
+
+test("switching to a paid Claude model without an API key is refused", () => {
+  const control = new ControlStore(null);
+  assert.match(runCommand(control, ["model", "opus"], { claudeAvailable: false }), /paid Claude model and no ANTHROPIC_API_KEY/);
+  assert.equal(control.get().model, "local");
+  assert.match(runCommand(control, ["model", "opus"], { claudeAvailable: true }), /switched to claude-opus-5-5/);
+  assert.match(runCommand(control, ["model", "local"], { claudeAvailable: false }), /switched to local/);
+});
+
+test("model answers are checked before use; only greeting categories get a reply", () => {
+  const answer = (category, occasion, reply) => JSON.stringify({ language: "English", category, occasion, reply });
+  assert.deepEqual(parseAnswer(answer("festival_greeting", "Diwali", " Happy Diwali! ")), { isGreeting: true, occasion: "diwali", reply: "Happy Diwali!" });
+  assert.deepEqual(parseAnswer(answer("birthday_wish", "bday", "Thanks!")), { isGreeting: true, occasion: "birthday", reply: "Thanks!" });
+  for (const category of ["question_or_plan", "promotion", "thanks", "other", "birthday_wish_for_someone_else", "made_up"]) {
+    assert.equal(parseAnswer(answer(category, "diwali", "Happy Diwali!")).isGreeting, false, category);
+  }
+  assert.equal(parseAnswer(answer("festival_greeting", "diwali", "")).isGreeting, false);
+  assert.equal(parseAnswer(answer("festival_greeting", "", "Hi")).isGreeting, false);
+  assert.equal(parseAnswer("not json").isGreeting, false);
+  assert.equal(parseAnswer("null").isGreeting, false);
 });
