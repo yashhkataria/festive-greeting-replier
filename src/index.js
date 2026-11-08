@@ -71,7 +71,9 @@ if (!env.ANTHROPIC_API_KEY && !env.ANTHROPIC_AUTH_TOKEN) fail("Set ANTHROPIC_API
 
 const dataDir = path.resolve(env.DATA_DIR || ".data");
 const sessionDir = path.join(dataDir, "session");
-const store = new RepliedStore(path.join(dataDir, "replied.json"));
+// A dry run keeps its reply history in memory only, so testing never stops
+// someone from getting a real reply later.
+const store = new RepliedStore(config.dryRun ? null : path.join(dataDir, "replied.json"));
 const queue = new PendingQueue(path.join(dataDir, "pending.json"));
 const activity = new ActivityLog(path.join(dataDir, "activity.json"));
 // Kill switch + model switcher; CLAUDE_MODEL only sets the starting model.
