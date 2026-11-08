@@ -1,0 +1,10 @@
+# For any Linux server (VPS) with Docker:  docker compose up -d --build
+# Settings come from .env next to this file. The login and history live in ./.data.
+services:
+  agent:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./.data:/app/.data
+    shm_size: 512m

@@ -1,0 +1,9 @@
+# People the agent must never read or reply to.
+# One per line: a phone number (any format, e.g. +91 98765 43210 or 9876543210)
+# or the name exactly as saved in your phone's contacts.
+# Lines starting with # are ignored. Changes apply immediately, no restart needed.
+# Copy this file to ignore-contacts.txt (git-ignored) or use the IGNORE_CONTACTS setting.
+#
+# Examples (remove the # to use):
+# +91 98765 43210
+# Boss

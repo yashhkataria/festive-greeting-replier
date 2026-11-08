@@ -1,0 +1,8 @@
+node_modules
+.data
+.env
+.git
+ignore-contacts.txt
+close-contacts.txt
+test
+*.md

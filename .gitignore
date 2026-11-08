@@ -1,0 +1,13 @@
+node_modules/
+
+# Your WhatsApp login session and reply history. Never commit: the session gives access to your account.
+.data/
+
+# Your personal settings and contacts.
+.env
+ignore-contacts.txt
+
+.DS_Store
+
+# Close people list.
+close-contacts.txt

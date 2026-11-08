@@ -1,0 +1,8 @@
+# Close people: when they greet you, the agent does NOT reply for you.
+# Instead it sends you a reminder in your "Message yourself" chat to answer personally.
+# One per line: a phone number (any format) or the name exactly as saved in your phone.
+# Copy this file to close-contacts.txt (git-ignored) or use the CLOSE_CONTACTS setting.
+#
+# Examples (remove the # to use):
+# Mom
+# +91 98765 43210
