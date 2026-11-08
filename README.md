@@ -92,20 +92,38 @@ docker compose logs -f
 
 The pairing code shows in the logs. Data is kept in `./.data` next to the files.
 
-## Kill switch and model switcher
+## Control it from your phone
 
-Send these in your WhatsApp **"Message yourself"** chat. This works wherever the
-agent runs:
+Send these in your WhatsApp **"Message yourself"** chat (search for your own
+name). Only messages you send are obeyed, and the agent answers there with a 🤖
+message. Changes apply to the very next message and survive restarts. Settings
+changed from the phone override `.env`.
 
 | Message | Effect |
 |---|---|
+| `greeter status` | On/off, model, today's replies and what's scheduled |
 | `greeter pause` | Kill switch: stop all replies and cancel every scheduled one |
 | `greeter resume` | Start replying again |
-| `greeter status` | On/off, model, today's replies and what's scheduled |
 | `greeter model opus` / `sonnet` / `haiku` | Switch the Claude model |
+| `greeter close add Mom` | Add someone to close people (you get a reminder instead of an auto-reply) |
+| `greeter close remove Mom` / `greeter close list` | Remove someone / show the list |
+| `greeter ignore add +91 98765 43210` | Never read or answer this person |
+| `greeter ignore remove ...` / `greeter ignore list` | Remove someone / show the list |
+| `greeter quiet 23:00-08:00` / `greeter quiet off` | Set or turn off quiet hours |
+| `greeter limit 40` | Automatic replies per day (`0` = no limit) |
+| `greeter delay 15-300` | Random wait before replying, in seconds |
+| `greeter summary 21:30` / `greeter summary off` | Daily summary time |
+| `greeter only diwali,holi,birthday` / `greeter only all` | Which occasions to answer |
+| `greeter settings` | Show every setting |
+| `greeter reset limit` | Go back to the `.env` value (also `quiet`, `delay`, `summary`, `only`) |
+| `greeter` | List all commands |
 
-When running locally you can also use `npm run pause`, `npm run resume`,
-`npm run status` and `npm run model -- haiku`. Changes survive restarts.
+Lists take names exactly as saved in your phone, or phone numbers in any format.
+Add several at once with commas: `greeter close add Mom, Dad`. You can also
+remove people who were listed in `.env`.
+
+On the Mac you can also use `npm run pause`, `npm run resume`, `npm run status`
+and `npm run model -- haiku`.
 
 | Model | Notes |
 |---|---|
@@ -198,7 +216,7 @@ WhatsApp account. To unlink the agent, remove it under Linked devices on your ph
 | `src/agent.js` | Decides which messages to answer and schedules replies |
 | `src/scheduler.js` | Sends scheduled replies; daily limit, kill switch and summary |
 | `src/classifier.js` | Asks Claude whether a message is a greeting and writes the reply |
-| `src/control.js` | Kill switch and model switcher |
+| `src/control.js` | Phone commands: kill switch, model, lists and settings |
 | `src/queue.js`, `src/activity.js` | Saved scheduled replies and the daily activity log |
 | `src/time.js` | Time zone, quiet hours and summary-time helpers |
 | `scripts/control.js` | Terminal commands for the kill switch and model |

@@ -52,7 +52,6 @@ export class RepliedStore {
  * @param {() => number} [deps.random]
  */
 export function createHandler({ classify, store, queue, activity, control, notifySelf, config, now = Date.now, random = Math.random, log = console }) {
-  const allowed = new Set(config.occasions || []);
   // Messages from the same person are handled one at a time, so two quick
   // greetings (say, a text and an image) never produce two replies.
   const chains = new Map();
@@ -111,7 +110,8 @@ export function createHandler({ classify, store, queue, activity, control, notif
     const model = control.get().model;
     const result = await classify({ text, senderName, image: image || undefined }, { model });
     if (!result.isGreeting) return "not-a-greeting";
-    if (allowed.size > 0 && !allowed.has(result.occasion)) return `ignored:occasion-not-enabled(${result.occasion})`;
+    const allowed = config.occasions || []; // read per message: it can change from your phone
+    if (allowed.length > 0 && !allowed.includes(result.occasion)) return `ignored:occasion-not-enabled(${result.occasion})`;
 
     const { year } = localParts(msg.timestamp * 1000, config.timeZone);
     if (store.hasOccasion(person, result.occasion, year)) return "ignored:already-replied";

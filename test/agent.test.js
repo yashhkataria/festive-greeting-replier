@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHandler, loadContactList, matchesContactList, planSendTime, RepliedStore } from "../src/agent.js";
 import { buildContent, normaliseOccasion } from "../src/classifier.js";
-import { ControlStore, parseChatCommand, resolveModel, runCommand } from "../src/control.js";
+import { ControlStore, effectiveList, parseChatCommand, resolveModel, runCommand, sameEntry } from "../src/control.js";
 import { PendingQueue } from "../src/queue.js";
 import { ActivityLog, formatSummary } from "../src/activity.js";
 import { createScheduler } from "../src/scheduler.js";
@@ -134,7 +134,7 @@ function setup({ config = {}, result = { isGreeting: true, occasion: "diwali", r
     clock.now = latest;
     await scheduler.tick();
   };
-  return { handle, scheduler, flush, clock, calls, models, notes, store, queue, activity, control };
+  return { handle, scheduler, flush, clock, calls, models, notes, store, queue, activity, control, config: fullConfig };
 }
 
 // --- who gets a reply ---
@@ -580,7 +580,7 @@ test("model switcher: the chosen model is used for the next message", async () =
 test("control commands", () => {
   const control = new ControlStore(null);
   assert.match(runCommand(control, ["status"]), /ON\. Model: claude-opus-5-5/);
-  assert.match(runCommand(control, ["status"], () => "Scheduled: 3."), /Scheduled: 3\./);
+  assert.match(runCommand(control, ["status"], { status: () => "Scheduled: 3." }), /Scheduled: 3\./);
   assert.match(runCommand(control, ["pause"]), /paused/i);
   assert.equal(control.get().paused, true);
   assert.match(runCommand(control, ["resume"]), /resumed/i);
@@ -588,7 +588,7 @@ test("control commands", () => {
   assert.match(runCommand(control, ["model", "sonnet"]), /claude-sonnet-5-5/);
   assert.match(runCommand(control, ["model", "gpt"]), /Unknown model/);
   assert.equal(control.get().model, "claude-sonnet-5-5");
-  assert.match(runCommand(control, ["nonsense"]), /Commands:/);
+  assert.match(runCommand(control, ["nonsense"]), /^Commands/);
 });
 
 test("model names resolve to known models only", () => {
@@ -614,7 +614,9 @@ test("chat commands are recognised, and the agent's own messages are not", () =>
 test("control state persists across restarts, and a damaged file means paused", () => {
   const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "control-")), "control.json");
   new ControlStore(file).set({ paused: true, model: "claude-haiku-5-5" });
-  assert.deepEqual(new ControlStore(file).get(), { paused: true, model: "claude-haiku-5-5" });
+  const reloaded = new ControlStore(file).get();
+  assert.equal(reloaded.paused, true);
+  assert.equal(reloaded.model, "claude-haiku-5-5");
   fs.writeFileSync(file, "{not json");
   assert.equal(new ControlStore(file).get().paused, true);
 });
@@ -671,4 +673,91 @@ test("buildContent drops oversized or unsupported images", () => {
 test("occasion ids are normalised", () => {
   assert.equal(normaliseOccasion(" Bhai Dooj "), "bhai-dooj");
   assert.equal(normaliseOccasion("Eid al-Fitr"), "eid-al-fitr");
+});
+
+// --- phone commands for lists and settings ---
+
+const cmd = (control, text, info) => runCommand(control, parseChatCommand(text), info);
+
+test("close list: add, list, remove from the phone", () => {
+  const control = new ControlStore(null);
+  assert.match(cmd(control, "greeter close add Mom, +91 98765 43210"), /Added to close people: Mom, \+91 98765 43210/);
+  assert.match(cmd(control, "greeter close add mom"), /Already on the close people: mom/);
+  assert.match(cmd(control, "greeter close list"), /close people \(2\):\n• Mom\n• \+91 98765 43210/);
+  assert.match(cmd(control, "greeter close remove 9876543210"), /Removed from close people/);
+  assert.deepEqual(effectiveList([], control.get().lists.close), ["Mom"]);
+  assert.match(cmd(control, "greeter close remove Dad"), /Not on the close people: Dad/);
+});
+
+test("lists: entries from .env can be removed from the phone, and added back", () => {
+  const control = new ControlStore(null);
+  const info = { baseLists: { ignore: () => ["Boss", "+91 90000 00001"] } };
+  assert.match(cmd(control, "greeter ignore list", info), /ignore list \(2\)/);
+  assert.match(cmd(control, "greeter ignore remove boss", info), /Removed from ignore list: boss/);
+  assert.deepEqual(effectiveList(info.baseLists.ignore(), control.get().lists.ignore), ["+91 90000 00001"]);
+  assert.match(cmd(control, "greeter ignore add Boss", info), /Added to ignore list: Boss/);
+  assert.deepEqual(effectiveList(info.baseLists.ignore(), control.get().lists.ignore), ["Boss", "+91 90000 00001"]);
+});
+
+test("lists: bad entries and bad usage are explained, not saved", () => {
+  const control = new ControlStore(null);
+  assert.match(cmd(control, "greeter close add 12345"), /Not a name or full phone number: 12345/);
+  assert.match(cmd(control, "greeter close Mom"), /Use "greeter close add Mom"/);
+  assert.match(cmd(control, "greeter close add"), /Say who/);
+  assert.match(cmd(control, "greeter ignore"), /ignore list is empty/);
+  assert.deepEqual(control.get().lists.close, { added: [], removed: [] });
+});
+
+test("a list change from the phone applies to the very next message", async () => {
+  let control;
+  const ctx = setup({ config: { closeList: () => effectiveList([], control.get().lists.close) } });
+  control = ctx.control;
+  cmd(control, "greeter close add Rahul Sharma");
+  assert.equal(await ctx.handle(fakeMsg()), "reminded");
+  cmd(control, "greeter close remove Rahul Sharma");
+  assert.equal(await ctx.handle(fakeMsg({ chat: fakeChat({ id: "917777777777@c.us" }) })), "scheduled");
+});
+
+test("an occasion change applies to the very next message", async () => {
+  const ctx = setup();
+  ctx.config.occasions = ["birthday"];
+  assert.equal(await ctx.handle(fakeMsg()), "ignored:occasion-not-enabled(diwali)");
+  ctx.config.occasions = [];
+  assert.equal(await ctx.handle(fakeMsg()), "scheduled");
+});
+
+test("settings commands validate and save", () => {
+  const control = new ControlStore(null);
+  assert.match(cmd(control, "greeter quiet 22:00-07:30"), /Quiet hours set to 22:00-07:30/);
+  assert.equal(control.get().settings.quietHours, "22:00-07:30");
+  assert.match(cmd(control, "greeter quiet 22"), /Invalid quiet hours/);
+  assert.match(cmd(control, "greeter quiet off"), /turned off/);
+  assert.match(cmd(control, "greeter limit 25"), /25 automatic replies/);
+  assert.equal(control.get().settings.dailyLimit, 25);
+  assert.match(cmd(control, "greeter limit lots"), /Say a number/);
+  assert.match(cmd(control, "greeter delay 30-600"), /30s to 600s/);
+  assert.deepEqual(control.get().settings.delaySeconds, { min: 30, max: 600 });
+  assert.match(cmd(control, "greeter delay 600-30"), /must not be larger/);
+  assert.match(cmd(control, "greeter summary 20:00"), /20:00/);
+  assert.match(cmd(control, "greeter summary 9pm"), /Invalid time/);
+  assert.match(cmd(control, "greeter only Diwali, Bhai Dooj"), /Only answering: diwali, bhai-dooj/);
+  assert.deepEqual(control.get().settings.occasions, ["diwali", "bhai-dooj"]);
+  assert.match(cmd(control, "greeter only all"), /all festivals/);
+  assert.match(cmd(control, "greeter reset limit"), /back to the .env value/);
+  assert.equal(control.get().settings.dailyLimit, undefined);
+  assert.match(cmd(control, "greeter reset colour"), /Say which setting/);
+  assert.match(cmd(control, "greeter settings", { settings: () => "Settings: x" }), /^Settings: x$/);
+});
+
+test("every reply to a phone command is safe to send to yourself", () => {
+  const control = new ControlStore(null);
+  const texts = ["greeter", "greeter close add Mom", "greeter close list", "greeter quiet 23:00-08:00", "greeter limit 5", "greeter only all", "greeter settings"];
+  for (const text of texts) assert.equal(parseChatCommand(`🤖 ${cmd(control, text)}`), null, text);
+});
+
+test("same person matching for list edits", () => {
+  assert.equal(sameEntry("Mom", "mom"), true);
+  assert.equal(sameEntry("+91 98765 43210", "9876543210"), true);
+  assert.equal(sameEntry("9876543210", "9876543211"), false);
+  assert.equal(sameEntry("Mom", "9876543210"), false);
 });

@@ -6,7 +6,7 @@ import pkg from "whatsapp-web.js";
 import qrcode from "qrcode-terminal";
 import { classifyAndReply, normaliseOccasion } from "./classifier.js";
 import { createHandler, loadContactList, RepliedStore } from "./agent.js";
-import { ControlStore, parseChatCommand, runCommand } from "./control.js";
+import { ControlStore, effectiveList, parseChatCommand, runCommand } from "./control.js";
 import { PendingQueue } from "./queue.js";
 import { ActivityLog } from "./activity.js";
 import { createScheduler } from "./scheduler.js";
@@ -34,50 +34,91 @@ function contactList(fileVar, defaultFile, listVar) {
   return () => [...loadContactList(filePath), ...fromEnv];
 }
 
-let config;
+const dataDir = path.resolve(env.DATA_DIR || ".data");
+const sessionDir = path.join(dataDir, "session");
+// Kill switch, model and everything else you change from your phone (see control.js).
+const control = new ControlStore(path.join(dataDir, "control.json"), env.CLAUDE_MODEL || "opus");
+
+// Settings from .env (or their defaults). Phone commands can override most of them.
+let defaults;
 try {
-  config = {
-    dryRun: env.DRY_RUN === "1",
-    // Only people saved in your phone's contacts get replies, unless this is set.
-    replyToUnknown: env.REPLY_TO_UNKNOWN === "1",
-    // People whose messages are never looked at or answered.
-    ignoreList: contactList("IGNORE_FILE", "ignore-contacts.txt", "IGNORE_CONTACTS"),
-    // People you want to answer yourself: you get a reminder instead of an automatic reply.
-    closeList: contactList("CLOSE_CONTACTS_FILE", "close-contacts.txt", "CLOSE_CONTACTS"),
-    // Ignore anything older than this, e.g. backlog delivered after being offline for days.
-    maxMessageAgeSeconds: numberSetting("MAX_MESSAGE_AGE_HOURS", 24) * 3600,
-    // Never auto-reply to the same person twice within this many hours.
-    cooldownHours: numberSetting("COOLDOWN_HOURS", 12),
-    // Comma-separated list such as "diwali,holi,birthday"; empty means every festival and birthdays.
+  defaults = {
     occasions: (env.OCCASIONS || "").split(",").map(normaliseOccasion).filter(Boolean),
-    // Random wait before each reply, so replies don't follow a pattern.
     minDelayMs: numberSetting("MIN_DELAY_SECONDS", 15) * 1000,
     maxDelayMs: numberSetting("MAX_DELAY_SECONDS", 300) * 1000,
-    // At most this many automatic replies per day; 0 means no limit.
     dailyLimit: numberSetting("DAILY_REPLY_LIMIT", 40),
-    // Your local time zone, for quiet hours, the summary and "today".
-    timeZone: env.TIMEZONE || "Asia/Kolkata",
-    // No replies are sent in this window; they go out shortly after it ends.
     quietHours: parseWindow(env.QUIET_HOURS ?? "23:00-08:00"),
-    // When the daily summary is sent to your "Message yourself" chat; "off" disables it.
     summaryTime: /^\s*off\s*$/i.test(env.SUMMARY_TIME || "") ? null : parseClock(env.SUMMARY_TIME || "21:30"),
+    timeZone: env.TIMEZONE || "Asia/Kolkata",
   };
-  checkTimeZone(config.timeZone);
+  checkTimeZone(defaults.timeZone);
 } catch (err) {
   fail(err.message);
 }
-if (config.minDelayMs > config.maxDelayMs) fail("MIN_DELAY_SECONDS must not be larger than MAX_DELAY_SECONDS.");
+if (defaults.minDelayMs > defaults.maxDelayMs) fail("MIN_DELAY_SECONDS must not be larger than MAX_DELAY_SECONDS.");
 if (!env.ANTHROPIC_API_KEY && !env.ANTHROPIC_AUTH_TOKEN) fail("Set ANTHROPIC_API_KEY before starting (see README).");
 
-const dataDir = path.resolve(env.DATA_DIR || ".data");
-const sessionDir = path.join(dataDir, "session");
+/** A phone-set value if there is a valid one, otherwise the .env value. */
+function fromPhone(name, parse, fallback) {
+  const value = control.get().settings[name];
+  if (value === undefined) return fallback;
+  try {
+    return parse(value);
+  } catch {
+    return fallback;
+  }
+}
+
+const envLists = {
+  ignore: contactList("IGNORE_FILE", "ignore-contacts.txt", "IGNORE_CONTACTS"),
+  close: contactList("CLOSE_CONTACTS_FILE", "close-contacts.txt", "CLOSE_CONTACTS"),
+};
+
+// Read on every use, so phone changes apply to the very next message.
+const config = {
+  dryRun: env.DRY_RUN === "1",
+  // Only people saved in your phone's contacts get replies, unless this is set.
+  replyToUnknown: env.REPLY_TO_UNKNOWN === "1",
+  // Ignore anything older than this, e.g. backlog delivered after being offline for days.
+  maxMessageAgeSeconds: numberSetting("MAX_MESSAGE_AGE_HOURS", 24) * 3600,
+  // Never auto-reply to the same person twice within this many hours.
+  cooldownHours: numberSetting("COOLDOWN_HOURS", 12),
+  // Your local time zone, for quiet hours, the summary and "today".
+  timeZone: defaults.timeZone,
+  // People whose messages are never looked at or answered.
+  ignoreList: () => effectiveList(envLists.ignore(), control.get().lists.ignore),
+  // People you want to answer yourself: you get a reminder instead of an automatic reply.
+  closeList: () => effectiveList(envLists.close(), control.get().lists.close),
+  // Which occasions to answer; empty means every festival and birthdays.
+  get occasions() {
+    return fromPhone("occasions", (v) => (Array.isArray(v) ? v : []), defaults.occasions);
+  },
+  // Random wait before each reply, so replies don't follow a pattern.
+  get minDelayMs() {
+    return fromPhone("delaySeconds", (v) => v.min * 1000, defaults.minDelayMs);
+  },
+  get maxDelayMs() {
+    return fromPhone("delaySeconds", (v) => v.max * 1000, defaults.maxDelayMs);
+  },
+  // At most this many automatic replies per day; 0 means no limit.
+  get dailyLimit() {
+    return fromPhone("dailyLimit", Number, defaults.dailyLimit);
+  },
+  // No replies are sent in this window; they go out shortly after it ends.
+  get quietHours() {
+    return fromPhone("quietHours", parseWindow, defaults.quietHours);
+  },
+  // When the daily summary is sent to your "Message yourself" chat; null = off.
+  get summaryTime() {
+    return fromPhone("summaryTime", (v) => (v === "off" ? null : parseClock(v)), defaults.summaryTime);
+  },
+};
+
 // A dry run keeps its reply history in memory only, so testing never stops
 // someone from getting a real reply later.
 const store = new RepliedStore(config.dryRun ? null : path.join(dataDir, "replied.json"));
 const queue = new PendingQueue(path.join(dataDir, "pending.json"));
 const activity = new ActivityLog(path.join(dataDir, "activity.json"));
-// Kill switch + model switcher; CLAUDE_MODEL only sets the starting model.
-const control = new ControlStore(path.join(dataDir, "control.json"), env.CLAUDE_MODEL || "opus");
 
 // In a container, a restart can leave Chrome's profile lock behind, which would
 // stop Chrome from starting. Only one agent runs per container, so it is safe to clear.
@@ -127,6 +168,28 @@ function describe() {
   );
 }
 
+function clock(minutes) {
+  return `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
+}
+
+function describeSettings() {
+  const { model, paused } = control.get();
+  const quiet = config.quietHours;
+  return [
+    `Settings${paused ? " (PAUSED)" : ""}:`,
+    `• Model: ${model}`,
+    `• Occasions: ${config.occasions.length ? config.occasions.join(", ") : "all festivals and birthdays"}`,
+    `• Delay: ${config.minDelayMs / 1000}s to ${config.maxDelayMs / 1000}s`,
+    `• Quiet hours: ${quiet ? `${clock(quiet.start)}-${clock(quiet.end)}` : "off"}`,
+    `• Daily limit: ${config.dailyLimit || "none"}`,
+    `• Summary: ${config.summaryTime == null ? "off" : clock(config.summaryTime)}`,
+    `• Close people: ${config.closeList().length}, ignore list: ${config.ignoreList().length} (send "greeter close list" to see them)`,
+    `• Time zone: ${config.timeZone}${config.dryRun ? "\n• DRY RUN: nothing is sent" : ""}`,
+  ].join("\n");
+}
+
+const commandInfo = { status: describe, settings: describeSettings, baseLists: envLists };
+
 client.on("qr", (qr) => {
   console.log("Scan this QR code in WhatsApp > Settings > Linked devices > Link a device:");
   qrcode.generate(qr, { small: true });
@@ -164,8 +227,8 @@ client.on("message", (msg) => {
   handle(msg);
 });
 
-// Control from your phone: send yourself "greeter pause", "greeter resume",
-// "greeter status" or "greeter model haiku". Only your own messages are obeyed;
+// Control from your phone: send yourself "greeter ..." commands (see control.js
+// or send "greeter" for the list). Only your own messages are obeyed;
 // the answer always goes to your "Message yourself" chat. Answers start with an
 // emoji so they are never mistaken for a new command.
 client.on("message_create", async (msg) => {
@@ -173,7 +236,7 @@ client.on("message_create", async (msg) => {
   const args = parseChatCommand(msg.body);
   if (!args) return;
   try {
-    const answer = `🤖 ${runCommand(control, args, describe)}`;
+    const answer = `🤖 ${runCommand(control, args, commandInfo)}`;
     console.log(`[control] ${args.join(" ")} -> ${answer}`);
     // Apply a pause right away instead of at the next scheduler tick.
     if (control.get().paused) await scheduler.tick();
